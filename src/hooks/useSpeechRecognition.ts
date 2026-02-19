@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
+import { supabase } from "@/integrations/supabase/client";
 
 export type JarvisStatus = "idle" | "listening" | "thinking" | "speaking" | "offline";
 
@@ -17,6 +18,15 @@ interface UseSpeechRecognitionReturn {
   messages: Message[];
   status: JarvisStatus;
   volume: number;
+  sendTextMessage: (text: string) => void;
+}
+
+function generateSessionId(): string {
+  const stored = sessionStorage.getItem("jarvis-session-id");
+  if (stored) return stored;
+  const id = crypto.randomUUID();
+  sessionStorage.setItem("jarvis-session-id", id);
+  return id;
 }
 
 export function useSpeechRecognition(): UseSpeechRecognitionReturn {
@@ -36,6 +46,7 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animFrameRef = useRef<number>(0);
   const streamRef = useRef<MediaStream | null>(null);
+  const sessionIdRef = useRef(generateSessionId());
 
   const updateVolume = useCallback(() => {
     if (analyserRef.current) {
@@ -47,53 +58,78 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
     animFrameRef.current = requestAnimationFrame(updateVolume);
   }, []);
 
-  const processUserMessage = useCallback((text: string) => {
+  const speakResponse = useCallback((text: string) => {
+    if ("speechSynthesis" in window) {
+      // Cancel any ongoing speech
+      speechSynthesis.cancel();
+      
+      const utterance = new SpeechSynthesisUtterance(text);
+      const voices = speechSynthesis.getVoices();
+      // Try to find a good male English voice
+      const preferredVoice =
+        voices.find((v) => v.name.includes("Daniel") && v.lang.startsWith("en")) ||
+        voices.find((v) => v.name.includes("James") && v.lang.startsWith("en")) ||
+        voices.find((v) => v.lang.startsWith("en-GB") && v.name.toLowerCase().includes("male")) ||
+        voices.find((v) => v.lang.startsWith("en"));
+      if (preferredVoice) utterance.voice = preferredVoice;
+      utterance.rate = 0.95;
+      utterance.pitch = 0.85;
+      utterance.onstart = () => setStatus("speaking");
+      utterance.onend = () => setStatus(isListening ? "listening" : "idle");
+      utterance.onerror = () => setStatus(isListening ? "listening" : "idle");
+      speechSynthesis.speak(utterance);
+    } else {
+      setTimeout(() => setStatus(isListening ? "listening" : "idle"), 1000);
+    }
+  }, [isListening]);
+
+  const processUserMessage = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
     const userMsg: Message = {
       id: Date.now().toString(),
       role: "user",
-      content: text,
+      content: trimmed,
       timestamp: new Date(),
     };
     setMessages((prev) => [...prev, userMsg]);
     setStatus("thinking");
 
-    // Simulate AI response
-    setTimeout(() => {
-      const responses = [
-        "I've processed your request. Is there anything else you need?",
-        "Understood. I'll take care of that right away.",
-        "Analyzing the data now. One moment please.",
-        "I've found several relevant results for your query.",
-        "All systems are operating within normal parameters.",
-        "I've noted that down. Would you like me to set a reminder?",
-      ];
-      const response = responses[Math.floor(Math.random() * responses.length)];
+    try {
+      const { data, error } = await supabase.functions.invoke("jarvis-chat", {
+        body: { message: trimmed, sessionId: sessionIdRef.current },
+      });
+
+      if (error) throw error;
+
+      const responseText = data?.response || "I apologize, I'm experiencing difficulties at the moment.";
+
       const aiMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: response,
+        content: responseText,
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, aiMsg]);
-      setStatus("speaking");
+      speakResponse(responseText);
+    } catch (err) {
+      console.error("JARVIS chat error:", err);
+      const fallback = "I apologize, sir. I seem to be experiencing a temporary disruption in my systems.";
+      const aiMsg: Message = {
+        id: (Date.now() + 1).toString(),
+        role: "assistant",
+        content: fallback,
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, aiMsg]);
+      speakResponse(fallback);
+    }
+  }, [speakResponse]);
 
-      // Simulate speaking with browser TTS
-      if ("speechSynthesis" in window) {
-        const utterance = new SpeechSynthesisUtterance(response);
-        const voices = speechSynthesis.getVoices();
-        const maleVoice = voices.find(
-          (v) => v.lang.startsWith("en") && v.name.toLowerCase().includes("male")
-        ) || voices.find((v) => v.lang.startsWith("en"));
-        if (maleVoice) utterance.voice = maleVoice;
-        utterance.rate = 0.95;
-        utterance.pitch = 0.85;
-        utterance.onend = () => setStatus("idle");
-        speechSynthesis.speak(utterance);
-      } else {
-        setTimeout(() => setStatus("idle"), 2000);
-      }
-    }, 1500);
-  }, []);
+  const sendTextMessage = useCallback((text: string) => {
+    processUserMessage(text);
+  }, [processUserMessage]);
 
   const startListening = useCallback(async () => {
     const SpeechRecognition =
@@ -148,18 +184,28 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
     };
 
     recognition.onend = () => {
-      if (isListening) recognition.start();
+      // Restart if still listening
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.start();
+        } catch (e) {
+          // already started
+        }
+      }
     };
 
     recognitionRef.current = recognition;
     recognition.start();
     setIsListening(true);
     setStatus("listening");
-  }, [isListening, processUserMessage, updateVolume]);
+  }, [processUserMessage, updateVolume]);
 
   const stopListening = useCallback(() => {
-    recognitionRef.current?.stop();
-    recognitionRef.current = null;
+    if (recognitionRef.current) {
+      recognitionRef.current.onend = null; // prevent restart
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
     cancelAnimationFrame(animFrameRef.current);
     streamRef.current?.getTracks().forEach((t) => t.stop());
     analyserRef.current = null;
@@ -172,12 +218,19 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
   useEffect(() => {
     // Pre-load voices
     speechSynthesis?.getVoices();
+    const handleVoicesChanged = () => speechSynthesis?.getVoices();
+    speechSynthesis?.addEventListener?.("voiceschanged", handleVoicesChanged);
+    
     return () => {
-      recognitionRef.current?.stop();
+      speechSynthesis?.removeEventListener?.("voiceschanged", handleVoicesChanged);
+      if (recognitionRef.current) {
+        recognitionRef.current.onend = null;
+        recognitionRef.current.stop();
+      }
       cancelAnimationFrame(animFrameRef.current);
       streamRef.current?.getTracks().forEach((t) => t.stop());
     };
   }, []);
 
-  return { isListening, transcript, startListening, stopListening, messages, status, volume };
+  return { isListening, transcript, startListening, stopListening, messages, status, volume, sendTextMessage };
 }
