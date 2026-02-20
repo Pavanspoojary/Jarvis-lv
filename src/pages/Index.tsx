@@ -1,10 +1,13 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { VoiceOrb } from "@/components/VoiceOrb";
 import { StatusBar } from "@/components/StatusBar";
 import { ChatPanel } from "@/components/ChatPanel";
-import { CameraTracker } from "@/components/CameraTracker";
+import { VisionPanel } from "@/components/VisionPanel";
 import { SystemInfo } from "@/components/SystemInfo";
+import { TestingPanel } from "@/components/TestingPanel";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
+import { speakWithElevenLabs } from "@/services/ttsService";
+import type { FaceData } from "@/hooks/useVision";
 
 const Index = () => {
   const {
@@ -16,23 +19,26 @@ const Index = () => {
     status,
     volume,
     sendTextMessage,
+    clearHistory,
+    latency,
   } = useSpeechRecognition();
+
   const [cameraActive, setCameraActive] = useState(false);
   const [textInput, setTextInput] = useState("");
   const [, setTick] = useState(0);
+  const [faceDetected, setFaceDetected] = useState(false);
+  const [attentionScore, setAttentionScore] = useState(0);
+  const [handGesture, setHandGesture] = useState<string | null>(null);
+  const [showTests, setShowTests] = useState(false);
 
-  // Update clock every second
   useEffect(() => {
     const timer = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(timer);
   }, []);
 
   const handleOrbClick = () => {
-    if (isListening) {
-      stopListening();
-    } else {
-      startListening();
-    }
+    if (isListening) stopListening();
+    else startListening();
   };
 
   const handleTextSubmit = (e: React.FormEvent) => {
@@ -42,6 +48,27 @@ const Index = () => {
       setTextInput("");
     }
   };
+
+  const handleFaceData = useCallback((data: FaceData) => {
+    setFaceDetected(data.detected);
+    setAttentionScore(data.attentionScore);
+  }, []);
+
+  const handleHandGesture = useCallback((command: string | null) => {
+    setHandGesture(command);
+    // Gesture activation: raised hand toggles listening
+    if (command === "activate" && !isListening) {
+      startListening();
+    }
+  }, [isListening, startListening]);
+
+  const handleTestVoice = useCallback(() => {
+    speakWithElevenLabs(
+      "All systems are operational, sir. Voice output test complete.",
+      () => {},
+      () => {}
+    );
+  }, []);
 
   return (
     <div className="h-screen flex flex-col bg-background overflow-hidden">
@@ -56,7 +83,13 @@ const Index = () => {
       />
 
       {/* Top status bar */}
-      <StatusBar status={status} cameraActive={cameraActive} faceDetected={false} />
+      <StatusBar
+        status={status}
+        cameraActive={cameraActive}
+        faceDetected={faceDetected}
+        handGesture={handGesture}
+        latency={latency}
+      />
 
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
@@ -84,6 +117,21 @@ const Index = () => {
               SEND
             </button>
           </form>
+          {/* Quick actions */}
+          <div className="flex gap-2">
+            <button
+              onClick={clearHistory}
+              className="font-mono text-[9px] tracking-wider text-muted-foreground/50 hover:text-destructive transition-colors"
+            >
+              CLEAR MEMORY
+            </button>
+            <button
+              onClick={() => setShowTests(!showTests)}
+              className="font-mono text-[9px] tracking-wider text-muted-foreground/50 hover:text-neon-blue transition-colors ml-auto"
+            >
+              {showTests ? "HIDE" : "SHOW"} DIAGNOSTICS
+            </button>
+          </div>
         </div>
 
         {/* Center - Voice Orb */}
@@ -92,30 +140,49 @@ const Index = () => {
             <div className="w-[500px] h-[500px] rounded-full border border-neon-blue/5" />
             <div className="absolute w-[400px] h-[400px] rounded-full border border-neon-blue/5" />
           </div>
-
-          <VoiceOrb
-            status={status}
-            volume={volume}
-            onClick={handleOrbClick}
-            isListening={isListening}
-          />
+          <VoiceOrb status={status} volume={volume} onClick={handleOrbClick} isListening={isListening} />
         </div>
 
-        {/* Right panel - Camera + System */}
-        <div className="w-72 p-3 flex flex-col gap-3">
-          <CameraTracker
+        {/* Right panel */}
+        <div className="w-72 p-3 flex flex-col gap-3 overflow-y-auto">
+          <VisionPanel
             active={cameraActive}
             onToggle={() => setCameraActive(!cameraActive)}
+            onFaceData={handleFaceData}
+            onHandGesture={handleHandGesture}
           />
-          <SystemInfo isListening={isListening} />
+          <SystemInfo
+            isListening={isListening}
+            cameraActive={cameraActive}
+            faceDetected={faceDetected}
+            latency={latency}
+            attentionScore={attentionScore}
+          />
+          {showTests && (
+            <TestingPanel
+              isListening={isListening}
+              cameraActive={cameraActive}
+              latency={latency}
+              onTestMic={handleOrbClick}
+              onTestCamera={() => setCameraActive(!cameraActive)}
+              onTestVoice={handleTestVoice}
+            />
+          )}
         </div>
       </div>
 
       {/* Bottom bar */}
-      <div className="glass-panel px-6 py-2 flex items-center justify-center">
+      <div className="glass-panel px-6 py-2 flex items-center justify-center gap-8">
         <span className="font-mono text-[10px] text-muted-foreground/40 tracking-[0.3em]">
-          JARVIS v1.0 — PERSONAL AI ASSISTANT — ALL SYSTEMS NOMINAL
+          JARVIS v2.0 — PRODUCTION AI ASSISTANT
         </span>
+        <div className="flex gap-4">
+          {["AI", "TTS", "STT", "VISION", "TOOLS", "MEMORY"].map((mod) => (
+            <span key={mod} className="font-mono text-[9px] text-jarvis-online/60 tracking-wider">
+              {mod} ✓
+            </span>
+          ))}
+        </div>
       </div>
     </div>
   );

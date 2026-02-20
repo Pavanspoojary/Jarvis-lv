@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import type { JarvisStatus } from "@/hooks/useSpeechRecognition";
+import type { JarvisStatus } from "@/types/jarvis";
 
 interface VoiceOrbProps {
   status: JarvisStatus;

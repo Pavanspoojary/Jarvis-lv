@@ -1,11 +1,6 @@
 import { motion, AnimatePresence } from "framer-motion";
-
-interface Message {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  timestamp: Date;
-}
+import ReactMarkdown from "react-markdown";
+import type { Message } from "@/types/jarvis";
 
 interface ChatPanelProps {
   messages: Message[];
@@ -20,6 +15,7 @@ export function ChatPanel({ messages, transcript }: ChatPanelProps) {
         <h2 className="font-display text-xs tracking-[0.3em] text-muted-foreground">
           CONVERSATION LOG
         </h2>
+        <span className="ml-auto font-mono text-[9px] text-muted-foreground/40">{messages.length - 1} MSG</span>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -43,21 +39,21 @@ export function ChatPanel({ messages, transcript }: ChatPanelProps) {
                     : "bg-muted/50 text-foreground border border-neon-blue/10"
                 }`}
               >
-                {msg.content}
+                {msg.role === "assistant" ? (
+                  <div className="prose prose-sm prose-invert max-w-none [&_p]:m-0 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0">
+                    <ReactMarkdown>{msg.content}</ReactMarkdown>
+                  </div>
+                ) : (
+                  msg.content
+                )}
               </div>
             </motion.div>
           ))}
         </AnimatePresence>
 
         {transcript && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="flex flex-col items-end"
-          >
-            <span className="font-mono text-[10px] text-neon-cyan mb-1 tracking-wider">
-              TRANSCRIBING...
-            </span>
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col items-end">
+            <span className="font-mono text-[10px] text-neon-cyan mb-1 tracking-wider">TRANSCRIBING...</span>
             <div className="max-w-[85%] px-3 py-2 rounded-lg text-sm bg-secondary/50 text-secondary-foreground border border-neon-cyan/20 italic">
               {transcript}
             </div>

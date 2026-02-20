@@ -1,14 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
-
-export type JarvisStatus = "idle" | "listening" | "thinking" | "speaking" | "offline";
-
-interface Message {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  timestamp: Date;
-}
+import { speakWithElevenLabs, cancelSpeech } from "@/services/ttsService";
+import type { JarvisStatus, Message } from "@/types/jarvis";
 
 interface UseSpeechRecognitionReturn {
   isListening: boolean;
@@ -19,6 +12,8 @@ interface UseSpeechRecognitionReturn {
   status: JarvisStatus;
   volume: number;
   sendTextMessage: (text: string) => void;
+  clearHistory: () => void;
+  latency: number | null;
 }
 
 function generateSessionId(): string {
@@ -42,11 +37,13 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
   ]);
   const [status, setStatus] = useState<JarvisStatus>("idle");
   const [volume, setVolume] = useState(0);
+  const [latency, setLatency] = useState<number | null>(null);
   const recognitionRef = useRef<any>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animFrameRef = useRef<number>(0);
   const streamRef = useRef<MediaStream | null>(null);
   const sessionIdRef = useRef(generateSessionId());
+  const isProcessingRef = useRef(false);
 
   const updateVolume = useCallback(() => {
     if (analyserRef.current) {
@@ -58,34 +55,10 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
     animFrameRef.current = requestAnimationFrame(updateVolume);
   }, []);
 
-  const speakResponse = useCallback((text: string) => {
-    if ("speechSynthesis" in window) {
-      // Cancel any ongoing speech
-      speechSynthesis.cancel();
-      
-      const utterance = new SpeechSynthesisUtterance(text);
-      const voices = speechSynthesis.getVoices();
-      // Try to find a good male English voice
-      const preferredVoice =
-        voices.find((v) => v.name.includes("Daniel") && v.lang.startsWith("en")) ||
-        voices.find((v) => v.name.includes("James") && v.lang.startsWith("en")) ||
-        voices.find((v) => v.lang.startsWith("en-GB") && v.name.toLowerCase().includes("male")) ||
-        voices.find((v) => v.lang.startsWith("en"));
-      if (preferredVoice) utterance.voice = preferredVoice;
-      utterance.rate = 0.95;
-      utterance.pitch = 0.85;
-      utterance.onstart = () => setStatus("speaking");
-      utterance.onend = () => setStatus(isListening ? "listening" : "idle");
-      utterance.onerror = () => setStatus(isListening ? "listening" : "idle");
-      speechSynthesis.speak(utterance);
-    } else {
-      setTimeout(() => setStatus(isListening ? "listening" : "idle"), 1000);
-    }
-  }, [isListening]);
-
   const processUserMessage = useCallback(async (text: string) => {
     const trimmed = text.trim();
-    if (!trimmed) return;
+    if (!trimmed || isProcessingRef.current) return;
+    isProcessingRef.current = true;
 
     const userMsg: Message = {
       id: Date.now().toString(),
@@ -95,11 +68,17 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
     };
     setMessages((prev) => [...prev, userMsg]);
     setStatus("thinking");
+    cancelSpeech();
+
+    const startTime = performance.now();
 
     try {
       const { data, error } = await supabase.functions.invoke("jarvis-chat", {
         body: { message: trimmed, sessionId: sessionIdRef.current },
       });
+
+      const elapsed = Math.round(performance.now() - startTime);
+      setLatency(elapsed);
 
       if (error) throw error;
 
@@ -112,7 +91,12 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, aiMsg]);
-      speakResponse(responseText);
+
+      speakWithElevenLabs(
+        responseText,
+        () => setStatus("speaking"),
+        () => setStatus(isListening ? "listening" : "idle")
+      );
     } catch (err) {
       console.error("JARVIS chat error:", err);
       const fallback = "I apologize, sir. I seem to be experiencing a temporary disruption in my systems.";
@@ -123,13 +107,30 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, aiMsg]);
-      speakResponse(fallback);
+      speakWithElevenLabs(
+        fallback,
+        () => setStatus("speaking"),
+        () => setStatus(isListening ? "listening" : "idle")
+      );
+    } finally {
+      isProcessingRef.current = false;
     }
-  }, [speakResponse]);
+  }, [isListening]);
 
   const sendTextMessage = useCallback((text: string) => {
     processUserMessage(text);
   }, [processUserMessage]);
+
+  const clearHistory = useCallback(() => {
+    setMessages([{
+      id: "welcome",
+      role: "assistant",
+      content: "Memory cleared. How may I assist you, sir?",
+      timestamp: new Date(),
+    }]);
+    sessionStorage.removeItem("jarvis-session-id");
+    sessionIdRef.current = generateSessionId();
+  }, []);
 
   const startListening = useCallback(async () => {
     const SpeechRecognition =
@@ -184,13 +185,8 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
     };
 
     recognition.onend = () => {
-      // Restart if still listening
       if (recognitionRef.current) {
-        try {
-          recognitionRef.current.start();
-        } catch (e) {
-          // already started
-        }
+        try { recognitionRef.current.start(); } catch (e) { /* already started */ }
       }
     };
 
@@ -202,7 +198,7 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
 
   const stopListening = useCallback(() => {
     if (recognitionRef.current) {
-      recognitionRef.current.onend = null; // prevent restart
+      recognitionRef.current.onend = null;
       recognitionRef.current.stop();
       recognitionRef.current = null;
     }
@@ -216,11 +212,9 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
   }, []);
 
   useEffect(() => {
-    // Pre-load voices
     speechSynthesis?.getVoices();
     const handleVoicesChanged = () => speechSynthesis?.getVoices();
     speechSynthesis?.addEventListener?.("voiceschanged", handleVoicesChanged);
-    
     return () => {
       speechSynthesis?.removeEventListener?.("voiceschanged", handleVoicesChanged);
       if (recognitionRef.current) {
@@ -229,8 +223,11 @@ export function useSpeechRecognition(): UseSpeechRecognitionReturn {
       }
       cancelAnimationFrame(animFrameRef.current);
       streamRef.current?.getTracks().forEach((t) => t.stop());
+      cancelSpeech();
     };
   }, []);
 
-  return { isListening, transcript, startListening, stopListening, messages, status, volume, sendTextMessage };
+  return { isListening, transcript, startListening, stopListening, messages, status, volume, sendTextMessage, clearHistory, latency };
 }
+
+export type { JarvisStatus, Message };
