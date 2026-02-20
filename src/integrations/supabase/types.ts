@@ -38,6 +38,66 @@ export type Database = {
         }
         Relationships: []
       }
+      notes: {
+        Row: {
+          category: string | null
+          content: string
+          created_at: string
+          id: string
+          session_id: string
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          category?: string | null
+          content: string
+          created_at?: string
+          id?: string
+          session_id: string
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          category?: string | null
+          content?: string
+          created_at?: string
+          id?: string
+          session_id?: string
+          title?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      reminders: {
+        Row: {
+          completed: boolean
+          created_at: string
+          description: string | null
+          id: string
+          remind_at: string
+          session_id: string
+          title: string
+        }
+        Insert: {
+          completed?: boolean
+          created_at?: string
+          description?: string | null
+          id?: string
+          remind_at: string
+          session_id: string
+          title: string
+        }
+        Update: {
+          completed?: boolean
+          created_at?: string
+          description?: string | null
+          id?: string
+          remind_at?: string
+          session_id?: string
+          title?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

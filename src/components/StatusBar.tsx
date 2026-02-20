@@ -1,13 +1,15 @@
 import { motion } from "framer-motion";
-import type { JarvisStatus } from "@/hooks/useSpeechRecognition";
+import type { JarvisStatus } from "@/types/jarvis";
 
 interface StatusBarProps {
   status: JarvisStatus;
   cameraActive: boolean;
   faceDetected: boolean;
+  handGesture: string | null;
+  latency: number | null;
 }
 
-export function StatusBar({ status, cameraActive, faceDetected }: StatusBarProps) {
+export function StatusBar({ status, cameraActive, faceDetected, handGesture, latency }: StatusBarProps) {
   const time = new Date().toLocaleTimeString("en-US", { hour12: false });
   const date = new Date().toLocaleDateString("en-US", {
     weekday: "short",
@@ -34,9 +36,7 @@ export function StatusBar({ status, cameraActive, faceDetected }: StatusBarProps
   return (
     <div className="glass-panel px-6 py-3 flex items-center justify-between">
       <div className="flex items-center gap-6">
-        <h1 className="font-display text-lg tracking-[0.4em] text-neon">
-          JARVIS
-        </h1>
+        <h1 className="font-display text-lg tracking-[0.4em] text-neon">JARVIS</h1>
         <div className="h-4 w-px bg-border" />
         <div className="flex items-center gap-2">
           <motion.div
@@ -44,10 +44,14 @@ export function StatusBar({ status, cameraActive, faceDetected }: StatusBarProps
             animate={{ opacity: status === "idle" ? [1, 0.3, 1] : 1 }}
             transition={{ duration: 2, repeat: Infinity }}
           />
-          <span className="font-mono text-xs text-muted-foreground tracking-wider">
-            {statusLabel[status]}
-          </span>
+          <span className="font-mono text-xs text-muted-foreground tracking-wider">{statusLabel[status]}</span>
         </div>
+        {latency && (
+          <>
+            <div className="h-4 w-px bg-border" />
+            <span className="font-mono text-[10px] text-muted-foreground/60 tracking-wider">{latency}ms</span>
+          </>
+        )}
       </div>
 
       <div className="flex items-center gap-6">
@@ -57,6 +61,11 @@ export function StatusBar({ status, cameraActive, faceDetected }: StatusBarProps
             <span className="font-mono text-xs text-muted-foreground">
               {faceDetected ? "TRACKING" : "NO TARGET"}
             </span>
+          </div>
+        )}
+        {handGesture && (
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-xs text-jarvis-warning">✋ {handGesture.toUpperCase()}</span>
           </div>
         )}
         <div className="h-4 w-px bg-border" />
